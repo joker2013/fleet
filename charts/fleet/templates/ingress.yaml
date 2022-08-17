@@ -1,36 +1,67 @@
-{{- if .Values.createIngress }}
+{{- if .Values.ingress.enabled -}}
+{{- $fullName := "fleet" -}}
+{{- $svcPort := .Values.ingress.servicePort -}}
+{{- $kVer :=  .Capabilities.KubeVersion.GitVersion -}}
+{{- if semverCompare ">=1.19.0-0"  $kVer -}}
+apiVersion: networking.k8s.io/v1
+{{- else -}}
 apiVersion: networking.k8s.io/v1beta1
+{{- end }}
 kind: Ingress
 metadata:
-{{- if or .Values.ingressAnnotations .Values.gke.useGKEIngress }}
-  annotations:
-{{- range $key, $value := $.Values.ingressAnnotations }}
-    {{ $key }}: {{ $value | quote }}
-{{- end }}
-  {{- if .Values.gke.ingress.useGKEIngress }}
-    kubernetes.io/ingress.class: gce
-    {{- if .Values.gke.ingress.useManagedCertificate }}
-    kubernetes.io/ingress.allow-http: "false"
-    networking.gke.io/managed-certificates: fleet
-    {{- end }}
-  {{- end }}
-{{- end }}
+  name: {{ $fullName }}
   labels:
     app: fleet
     chart: fleet
     heritage: {{ .Release.Service }}
     release: {{ .Release.Name }}
-  name: fleet
   namespace: {{ .Release.Namespace }}
+  annotations:
+{{- if .Values.services }}
+  {{- if .Values.services.ingress.tls.letsEncrypt.enabled }}
+    cert-manager.io/cluster-issuer: {{ .Values.services.ingress.tls.letsEncrypt.issuer }}
+  {{- end }}
+    kubernetes.io/ingress.class: {{ .Values.services.ingress.class }}
+{{ else }}
+    kubernetes.io/ingress.class: "nginx"
+{{- end }}
+    nginx.ingress.kubernetes.io/enable-cors: "true" 
+    nginx.ingress.kubernetes.io/cors-allow-methods: "PUT, GET, POST, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+       more_set_headers "Access-Control-Allow-Origin: $http_origin";
+  {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
+{{- if .Values.ingress.tls }}
+  tls:
+  {{- range .Values.ingress.tls }}
+    - hosts:
+      {{- range .hosts }}
+        - {{ . | quote }}
+      {{- end }}
+      secretName: {{ .secretName }}
+  {{- end }}
+{{- end }}
   rules:
-  - host: {{ .Values.hostName }}
-    http:
-      paths:
-      - path: /*
-        # Next line required in k8s 1.19 and not supported in <=1.17
-        # pathType: Exact
-        backend:
-          serviceName: fleet
-          servicePort: fleet
+  {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+        {{- range .paths }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              {{- if semverCompare ">=1.19.0-0" $kVer }}
+              service:
+                name: {{ $fullName }}
+                port:
+                  number: {{ $svcPort }}
+              {{- else }}
+              serviceName: {{ $fullName }}
+              servicePort: {{ $svcPort }}
+             {{- end }}
+        {{- end }}
+  {{- end }}
 {{- end }}
